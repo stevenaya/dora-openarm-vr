@@ -164,9 +164,17 @@ def _run(args: argparse.Namespace) -> None:
     receiver = JsonUdpReceiver(args.host, args.port)
     processor = QuestPoseProcessor()
 
-    smoother_right = OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5)
-    smoother_left = OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5)
-    smoother_reference = OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5)
+    smoother_kwargs = dict(
+        min_cutoff=2.0,
+        beta=0.04,
+        d_cutoff=1.5,
+        min_cutoff_rot=3.0,
+        beta_rot=0.25,
+        d_cutoff_rot=3.0,
+    )
+    smoother_right = OneEuroPoseSmoother(**smoother_kwargs)
+    smoother_left = OneEuroPoseSmoother(**smoother_kwargs)
+    smoother_reference = OneEuroPoseSmoother(**smoother_kwargs)
 
     prev_v_right = VALID_OK
     prev_v_left = VALID_OK

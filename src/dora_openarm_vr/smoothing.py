@@ -15,9 +15,14 @@
 import numpy as np
 
 
-def _slerp_quat(q1: np.ndarray, q2: np.ndarray, alpha: float) -> np.ndarray:
+def _slerp_quat(
+    q1: np.ndarray, q2: np.ndarray, alpha: float, *, shortest: bool = True
+) -> np.ndarray:
     dot = np.dot(q1, q2)
-    if dot < 0.0:
+    if shortest and dot < 0.0:
+        q2 = -q2
+        dot = -dot
+    if dot < -0.9995:
         q2 = -q2
         dot = -dot
     if dot > 0.9995:
@@ -34,25 +39,46 @@ def _slerp_quat(q1: np.ndarray, q2: np.ndarray, alpha: float) -> np.ndarray:
     return s0 * q1 + s1 * q2
 
 
+def _quat_angle(q1: np.ndarray, q2: np.ndarray) -> float:
+    dot = abs(float(np.dot(q1, q2)))
+    dot = float(np.clip(dot, -1.0, 1.0))
+    return float(2.0 * np.arccos(dot))
+
+
 class OneEuroPoseSmoother:
     """1 Euro Filter applied to position (adaptive cutoff) and rotation (SLERP)."""
 
     def __init__(
-        self, min_cutoff: float = 10.0, beta: float = 0.8, d_cutoff: float = 1.0
+        self,
+        min_cutoff: float = 10.0,
+        beta: float = 0.8,
+        d_cutoff: float = 1.0,
+        min_cutoff_rot: float | None = None,
+        beta_rot: float | None = None,
+        d_cutoff_rot: float | None = None,
     ):
         self.min_cutoff = min_cutoff
         self.beta = beta
         self.d_cutoff = d_cutoff
+        self.min_cutoff_rot = (
+            min_cutoff if min_cutoff_rot is None else min_cutoff_rot
+        )
+        self.beta_rot = beta if beta_rot is None else beta_rot
+        self.d_cutoff_rot = d_cutoff if d_cutoff_rot is None else d_cutoff_rot
         self.p_prev = None
         self.q_prev = None
+        self.q_raw_prev = None
         self.dp_prev = np.zeros(3)
+        self.dq_prev = 0.0
         self.t_prev = None
 
     def reset(self) -> None:
         """Clear state so next sample is treated as a fresh start (call on INVALID→valid transition)."""
         self.p_prev = None
         self.q_prev = None
+        self.q_raw_prev = None
         self.dp_prev = np.zeros(3)
+        self.dq_prev = 0.0
         self.t_prev = None
 
     def smooth(self, t: float, target_pose: np.ndarray | None) -> np.ndarray | None:
@@ -60,11 +86,15 @@ class OneEuroPoseSmoother:
             return None
 
         t_p = target_pose[0:3]
-        t_q = target_pose[3:7]
+        t_q = target_pose[3:7].astype(np.float64)
+        t_q = t_q / np.linalg.norm(t_q)
+        if self.q_raw_prev is not None and np.dot(self.q_raw_prev, t_q) < 0.0:
+            t_q = -t_q
 
         if self.t_prev is None or self.p_prev is None:
             self.p_prev = t_p.copy()
             self.q_prev = t_q.copy()
+            self.q_raw_prev = t_q.copy()
             self.t_prev = t
             return target_pose.copy()
 
@@ -84,12 +114,21 @@ class OneEuroPoseSmoother:
         cutoff_p = self.min_cutoff + self.beta * speed
 
         alpha_p = get_alpha(dt, cutoff_p)
+        dq_raw = _quat_angle(self.q_prev, t_q) / dt
+        alpha_dq = get_alpha(dt, self.d_cutoff_rot)
+        dq_filtered = alpha_dq * dq_raw + (1.0 - alpha_dq) * self.dq_prev
+        cutoff_q = self.min_cutoff_rot + self.beta_rot * dq_filtered
+        alpha_q = get_alpha(dt, cutoff_q)
+
         p_hat = self.p_prev + alpha_p * (t_p - self.p_prev)
-        q_hat = _slerp_quat(self.q_prev, t_q, alpha_p)
+        q_hat = _slerp_quat(self.q_prev, t_q, alpha_q, shortest=False)
+        q_hat = q_hat / np.linalg.norm(q_hat)
 
         self.p_prev = p_hat
         self.q_prev = q_hat
+        self.q_raw_prev = t_q.copy()
         self.dp_prev = dp_filtered
+        self.dq_prev = dq_filtered
         self.t_prev = t
 
         return np.array(
