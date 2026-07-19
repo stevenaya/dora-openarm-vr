@@ -66,6 +66,7 @@ class OneEuroPoseSmoother:
         self.beta_rot = beta if beta_rot is None else beta_rot
         self.d_cutoff_rot = d_cutoff if d_cutoff_rot is None else d_cutoff_rot
         self.p_prev = None
+        self.p_raw_prev = None
         self.q_prev = None
         self.q_raw_prev = None
         self.dp_prev = np.zeros(3)
@@ -75,6 +76,7 @@ class OneEuroPoseSmoother:
     def reset(self) -> None:
         """Clear state so next sample is treated as a fresh start (call on INVALID→valid transition)."""
         self.p_prev = None
+        self.p_raw_prev = None
         self.q_prev = None
         self.q_raw_prev = None
         self.dp_prev = np.zeros(3)
@@ -93,6 +95,7 @@ class OneEuroPoseSmoother:
 
         if self.t_prev is None or self.p_prev is None:
             self.p_prev = t_p.copy()
+            self.p_raw_prev = t_p.copy()
             self.q_prev = t_q.copy()
             self.q_raw_prev = t_q.copy()
             self.t_prev = t
@@ -106,7 +109,8 @@ class OneEuroPoseSmoother:
             tau = 1.0 / (2 * np.pi * cutoff)
             return 1.0 / (1.0 + tau / dt)
 
-        dp_raw = (t_p - self.p_prev) / dt
+        assert self.p_raw_prev is not None
+        dp_raw = (t_p - self.p_raw_prev) / dt
         alpha_d = get_alpha(dt, self.d_cutoff)
         dp_filtered = alpha_d * dp_raw + (1.0 - alpha_d) * self.dp_prev
 
@@ -114,7 +118,7 @@ class OneEuroPoseSmoother:
         cutoff_p = self.min_cutoff + self.beta * speed
 
         alpha_p = get_alpha(dt, cutoff_p)
-        dq_raw = _quat_angle(self.q_prev, t_q) / dt
+        dq_raw = _quat_angle(self.q_raw_prev, t_q) / dt
         alpha_dq = get_alpha(dt, self.d_cutoff_rot)
         dq_filtered = alpha_dq * dq_raw + (1.0 - alpha_dq) * self.dq_prev
         cutoff_q = self.min_cutoff_rot + self.beta_rot * dq_filtered
@@ -125,6 +129,7 @@ class OneEuroPoseSmoother:
         q_hat = q_hat / np.linalg.norm(q_hat)
 
         self.p_prev = p_hat
+        self.p_raw_prev = t_p.copy()
         self.q_prev = q_hat
         self.q_raw_prev = t_q.copy()
         self.dp_prev = dp_filtered

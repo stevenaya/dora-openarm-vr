@@ -180,6 +180,10 @@ def _run(args: argparse.Namespace) -> None:
     prev_v_left = VALID_OK
     prev_v_overall = VALID_OK
     prev_v_reference = VALID_OK
+    processed_sequence = 0
+    pose_right = None
+    pose_left = None
+    pose_reference = None
 
     node = dora.Node()
     node.send_output("status", pa.array(["ready"]))
@@ -192,48 +196,52 @@ def _run(args: argparse.Namespace) -> None:
         if recv_ts:
             node.send_output("vr_receive_times", pa.array(recv_ts, type=pa.int64()))
 
-        msg = receiver.latest()
-        if msg is None:
+        msg, sequence, sample_time = receiver.latest_snapshot()
+        if msg is None or sample_time is None:
             continue
-        now = time.perf_counter()
 
-        v_overall = int(msg["v"]) if "v" in msg else VALID_OK
-        v_right = int(msg["vr"]) if "vr" in msg else VALID_OK
-        v_left = int(msg["vl"]) if "vl" in msg else VALID_OK
+        # Advance each filter once per UDP sample; cached poses still publish every tick.
+        if sequence != processed_sequence:
+            processed_sequence = sequence
+            v_overall = int(msg["v"]) if "v" in msg else VALID_OK
+            v_right = int(msg["vr"]) if "vr" in msg else VALID_OK
+            v_left = int(msg["vl"]) if "vl" in msg else VALID_OK
 
-        if v_overall != prev_v_overall:
-            print(
-                f"[receiver] validity: {_VALID_NAMES[prev_v_overall]} → {_VALID_NAMES[v_overall]} "
-                f"(L={_VALID_NAMES[v_left]}, R={_VALID_NAMES[v_right]})"
-            )
-            prev_v_overall = v_overall
+            if v_overall != prev_v_overall:
+                print(
+                    f"[receiver] validity: {_VALID_NAMES[prev_v_overall]} → {_VALID_NAMES[v_overall]} "
+                    f"(L={_VALID_NAMES[v_left]}, R={_VALID_NAMES[v_right]})"
+                )
+                prev_v_overall = v_overall
 
-        pose_right_raw, pose_left_raw, pose_reference_raw = processor.process(msg)
+            pose_right_raw, pose_left_raw, pose_reference_raw = processor.process(msg)
 
-        if v_right == VALID_INVALID:
-            if prev_v_right != VALID_INVALID:
-                smoother_right.reset()
-            pose_right = None
-        else:
-            pose_right = smoother_right.smooth(now, pose_right_raw)
+            if v_right == VALID_INVALID:
+                if prev_v_right != VALID_INVALID:
+                    smoother_right.reset()
+                pose_right = None
+            else:
+                pose_right = smoother_right.smooth(sample_time, pose_right_raw)
 
-        if v_left == VALID_INVALID:
-            if prev_v_left != VALID_INVALID:
-                smoother_left.reset()
-            pose_left = None
-        else:
-            pose_left = smoother_left.smooth(now, pose_left_raw)
+            if v_left == VALID_INVALID:
+                if prev_v_left != VALID_INVALID:
+                    smoother_left.reset()
+                pose_left = None
+            else:
+                pose_left = smoother_left.smooth(sample_time, pose_left_raw)
 
-        if v_overall == VALID_INVALID:
-            if prev_v_reference != VALID_INVALID:
-                smoother_reference.reset()
-            pose_reference = None
-        else:
-            pose_reference = smoother_reference.smooth(now, pose_reference_raw)
+            if v_overall == VALID_INVALID:
+                if prev_v_reference != VALID_INVALID:
+                    smoother_reference.reset()
+                pose_reference = None
+            else:
+                pose_reference = smoother_reference.smooth(
+                    sample_time, pose_reference_raw
+                )
 
-        prev_v_right = v_right
-        prev_v_left = v_left
-        prev_v_reference = v_overall
+            prev_v_right = v_right
+            prev_v_left = v_left
+            prev_v_reference = v_overall
 
         ts = {"timestamp": time.time_ns()}
 
