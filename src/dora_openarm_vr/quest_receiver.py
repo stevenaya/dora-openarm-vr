@@ -69,11 +69,10 @@ from .udp_receiver import JsonUdpReceiver
 
 
 def _map_trigger_to_gripper(trigger: float, side: str) -> float:
-    """trigger 0.0~1.0 → gripper angle"""
-    if side == "right":
-        return (-1.57 / 2.0) * (1.0 - trigger)  # 0→-1.57, 1→0
-    else:
-        return (1.57 / 2.0) * (1.0 - trigger)  # 0→ 1.57, 1→0
+    """Map a trigger value to the calibrated gripper angle."""
+    trigger = float(np.clip(trigger, 0.0, 1.0))
+    open_deg, closed_deg = (-45.0, 8.0) if side == "right" else (45.0, -8.0)
+    return float(np.deg2rad(open_deg + trigger * (closed_deg - open_deg)))
 
 
 # ── Frame alignment — edit here to tune ──────────────────────────────────────
@@ -165,14 +164,29 @@ def _run(args: argparse.Namespace) -> None:
     receiver = JsonUdpReceiver(args.host, args.port)
     processor = QuestPoseProcessor()
 
-    smoother_right = OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5)
-    smoother_left = OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5)
-    smoother_reference = OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5)
+    smoother_kwargs = dict(
+        min_cutoff=2.0,
+        beta=0.04,
+        d_cutoff=1.5,
+        independent_rotation_filter=args.independent_rotation_filter,
+        continuous_rotation_path=args.continuous_rotation_path,
+        raw_to_raw_speed=args.raw_to_raw_speed,
+        min_cutoff_rot=3.0,
+        beta_rot=0.25,
+        d_cutoff_rot=3.0,
+    )
+    smoother_right = OneEuroPoseSmoother(**smoother_kwargs)
+    smoother_left = OneEuroPoseSmoother(**smoother_kwargs)
+    smoother_reference = OneEuroPoseSmoother(**smoother_kwargs)
 
     prev_v_right = VALID_OK
     prev_v_left = VALID_OK
     prev_v_overall = VALID_OK
     prev_v_reference = VALID_OK
+    processed_revision = 0
+    pose_right = None
+    pose_left = None
+    pose_reference = None
 
     node = dora.Node()
     node.send_output("status", pa.array(["ready"]))
@@ -185,48 +199,52 @@ def _run(args: argparse.Namespace) -> None:
         if recv_ts:
             node.send_output("vr_receive_times", pa.array(recv_ts, type=pa.int64()))
 
-        msg = receiver.latest()
-        if msg is None:
+        msg, revision, sample_time = receiver.latest_snapshot()
+        if msg is None or sample_time is None:
             continue
-        now = time.perf_counter()
 
-        v_overall = int(msg["v"]) if "v" in msg else VALID_OK
-        v_right = int(msg["vr"]) if "vr" in msg else VALID_OK
-        v_left = int(msg["vl"]) if "vl" in msg else VALID_OK
+        # Advance the filters once per UDP snapshot; publish cached poses every tick.
+        if revision != processed_revision:
+            processed_revision = revision
+            v_overall = int(msg["v"]) if "v" in msg else VALID_OK
+            v_right = int(msg["vr"]) if "vr" in msg else VALID_OK
+            v_left = int(msg["vl"]) if "vl" in msg else VALID_OK
 
-        if v_overall != prev_v_overall:
-            print(
-                f"[receiver] validity: {_VALID_NAMES[prev_v_overall]} → {_VALID_NAMES[v_overall]} "
-                f"(L={_VALID_NAMES[v_left]}, R={_VALID_NAMES[v_right]})"
-            )
-            prev_v_overall = v_overall
+            if v_overall != prev_v_overall:
+                print(
+                    f"[receiver] validity: {_VALID_NAMES[prev_v_overall]} → {_VALID_NAMES[v_overall]} "
+                    f"(L={_VALID_NAMES[v_left]}, R={_VALID_NAMES[v_right]})"
+                )
+                prev_v_overall = v_overall
 
-        pose_right_raw, pose_left_raw, pose_reference_raw = processor.process(msg)
+            pose_right_raw, pose_left_raw, pose_reference_raw = processor.process(msg)
 
-        if v_right == VALID_INVALID:
-            if prev_v_right != VALID_INVALID:
-                smoother_right.reset()
-            pose_right = None
-        else:
-            pose_right = smoother_right.smooth(now, pose_right_raw)
+            if v_right == VALID_INVALID:
+                if prev_v_right != VALID_INVALID:
+                    smoother_right.reset()
+                pose_right = None
+            else:
+                pose_right = smoother_right.smooth(sample_time, pose_right_raw)
 
-        if v_left == VALID_INVALID:
-            if prev_v_left != VALID_INVALID:
-                smoother_left.reset()
-            pose_left = None
-        else:
-            pose_left = smoother_left.smooth(now, pose_left_raw)
+            if v_left == VALID_INVALID:
+                if prev_v_left != VALID_INVALID:
+                    smoother_left.reset()
+                pose_left = None
+            else:
+                pose_left = smoother_left.smooth(sample_time, pose_left_raw)
 
-        if v_overall == VALID_INVALID:
-            if prev_v_reference != VALID_INVALID:
-                smoother_reference.reset()
-            pose_reference = None
-        else:
-            pose_reference = smoother_reference.smooth(now, pose_reference_raw)
+            if v_overall == VALID_INVALID:
+                if prev_v_reference != VALID_INVALID:
+                    smoother_reference.reset()
+                pose_reference = None
+            else:
+                pose_reference = smoother_reference.smooth(
+                    sample_time, pose_reference_raw
+                )
 
-        prev_v_right = v_right
-        prev_v_left = v_left
-        prev_v_reference = v_overall
+            prev_v_right = v_right
+            prev_v_left = v_left
+            prev_v_reference = v_overall
 
         ts = {"timestamp": time.time_ns()}
 
@@ -307,6 +325,30 @@ def main() -> None:
     )
     parser.add_argument("--host", default=_DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=_DEFAULT_PORT)
+    parser.add_argument(
+        "--independent-rotation-filter",
+        action="store_true",
+        help=(
+            "Use an angular-speed-adaptive rotation filter instead of the "
+            "mainline position-derived SLERP alpha."
+        ),
+    )
+    parser.add_argument(
+        "--continuous-rotation-path",
+        action="store_true",
+        help=(
+            "Continuously unwrap raw quaternion signs and allow non-shortest "
+            "SLERP paths to preserve accumulated rotation direction."
+        ),
+    )
+    parser.add_argument(
+        "--raw-to-raw-speed",
+        action="store_true",
+        help=(
+            "Estimate linear and independent angular speed from consecutive "
+            "raw samples instead of from the filtered pose to the raw sample."
+        ),
+    )
     args = parser.parse_args()
     _run(args)
 

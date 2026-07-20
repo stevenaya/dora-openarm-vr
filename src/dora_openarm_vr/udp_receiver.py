@@ -14,7 +14,6 @@
 
 import collections
 import json
-import select
 import socket
 import threading
 import time
@@ -23,13 +22,18 @@ import time
 class JsonUdpReceiver:
     """Background thread that binds a UDP socket and keeps the latest parsed JSON packet."""
 
+    _ERROR_LOG_INTERVAL_S = 1.0
+
     def __init__(self, host: str, port: int, buf_size: int = 4096) -> None:
         self._host = host
         self._port = port
         self._buf_size = buf_size
         self._lock = threading.Lock()
         self._latest: dict | None = None
+        self._latest_revision = 0
+        self._latest_monotonic_s: float | None = None
         self._recv_ts: collections.deque[int] = collections.deque(maxlen=512)
+        self._last_error_log_s = 0.0
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -37,6 +41,15 @@ class JsonUdpReceiver:
     def latest(self) -> dict | None:
         with self._lock:
             return self._latest
+
+    def latest_snapshot(self) -> tuple[dict | None, int, float | None]:
+        """Return the latest packet, its revision, and monotonic receive time."""
+        with self._lock:
+            return (
+                self._latest,
+                self._latest_revision,
+                self._latest_monotonic_s,
+            )
 
     def drain_recv_timestamps(self) -> list[int]:
         """Return and clear the arrival timestamps (ns) collected since last call."""
@@ -57,6 +70,22 @@ class JsonUdpReceiver:
         except json.JSONDecodeError:
             return None
 
+    def _receive_one(self, srv: socket.socket) -> tuple[dict | None, int, float | None]:
+        """Receive and timestamp one UDP packet."""
+        data, _ = srv.recvfrom(self._buf_size)
+        recv_ns = time.time_ns()
+        recv_monotonic_s = time.perf_counter()
+        msg = self._parse_packet(data)
+        sample_time = recv_monotonic_s if msg is not None else None
+        return msg, recv_ns, sample_time
+
+    def _log_error(self, context: str, exc: BaseException) -> None:
+        now = time.monotonic()
+        if now - self._last_error_log_s < self._ERROR_LOG_INTERVAL_S:
+            return
+        self._last_error_log_s = now
+        print(f"[receiver] UDP {context} error: {type(exc).__name__}: {exc}")
+
     def _loop(self) -> None:
         while self._running:
             try:
@@ -68,30 +97,20 @@ class JsonUdpReceiver:
 
                     while self._running:
                         try:
-                            data, _ = srv.recvfrom(self._buf_size)
-                            recv_ns = time.time_ns()
-                            last_msg = self._parse_packet(data)
-                            arrivals = [recv_ns] if last_msg is not None else []
+                            msg, recv_ns, sample_time = self._receive_one(srv)
 
-                            # Drain any queued datagrams, keep only the freshest
-                            # pose, but record every packet's real arrival time.
-                            while select.select([srv], [], [], 0.0)[0]:
-                                data, _ = srv.recvfrom(self._buf_size)
-                                recv_ns = time.time_ns()
-                                parsed = self._parse_packet(data)
-                                if parsed is not None:
-                                    arrivals.append(recv_ns)
-                                    last_msg = parsed
-
-                            with self._lock:
-                                self._recv_ts.extend(arrivals)
-                                if last_msg is not None:
-                                    self._latest = last_msg
+                            if msg is not None:
+                                with self._lock:
+                                    self._recv_ts.append(recv_ns)
+                                    self._latest = msg
+                                    self._latest_revision += 1
+                                    self._latest_monotonic_s = sample_time
 
                         except TimeoutError:
                             continue
-                        except Exception:
-                            pass
-            except OSError:
+                        except Exception as exc:
+                            self._log_error("receive", exc)
+            except OSError as exc:
                 if self._running:
+                    self._log_error("socket", exc)
                     time.sleep(1.0)
