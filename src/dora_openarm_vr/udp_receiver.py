@@ -14,7 +14,6 @@
 
 import collections
 import json
-import select
 import socket
 import threading
 import time
@@ -29,6 +28,8 @@ class JsonUdpReceiver:
         self._buf_size = buf_size
         self._lock = threading.Lock()
         self._latest: dict | None = None
+        self._latest_sequence = 0
+        self._latest_monotonic_s: float | None = None
         self._recv_ts: collections.deque[int] = collections.deque(maxlen=512)
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -37,6 +38,15 @@ class JsonUdpReceiver:
     def latest(self) -> dict | None:
         with self._lock:
             return self._latest
+
+    def latest_snapshot(self) -> tuple[dict | None, int, float | None]:
+        """Return the latest packet, its local revision, and receive time."""
+        with self._lock:
+            return (
+                self._latest,
+                self._latest_sequence,
+                self._latest_monotonic_s,
+            )
 
     def drain_recv_timestamps(self) -> list[int]:
         """Return and clear the arrival timestamps (ns) collected since last call."""
@@ -57,6 +67,16 @@ class JsonUdpReceiver:
         except json.JSONDecodeError:
             return None
 
+    def _store_packet(self, data: bytes, recv_ns: int, recv_monotonic_s: float) -> None:
+        message = self._parse_packet(data)
+        if message is None:
+            return
+        with self._lock:
+            self._recv_ts.append(recv_ns)
+            self._latest = message
+            self._latest_sequence += 1
+            self._latest_monotonic_s = recv_monotonic_s
+
     def _loop(self) -> None:
         while self._running:
             try:
@@ -70,23 +90,8 @@ class JsonUdpReceiver:
                         try:
                             data, _ = srv.recvfrom(self._buf_size)
                             recv_ns = time.time_ns()
-                            last_msg = self._parse_packet(data)
-                            arrivals = [recv_ns] if last_msg is not None else []
-
-                            # Drain any queued datagrams, keep only the freshest
-                            # pose, but record every packet's real arrival time.
-                            while select.select([srv], [], [], 0.0)[0]:
-                                data, _ = srv.recvfrom(self._buf_size)
-                                recv_ns = time.time_ns()
-                                parsed = self._parse_packet(data)
-                                if parsed is not None:
-                                    arrivals.append(recv_ns)
-                                    last_msg = parsed
-
-                            with self._lock:
-                                self._recv_ts.extend(arrivals)
-                                if last_msg is not None:
-                                    self._latest = last_msg
+                            recv_monotonic_s = time.perf_counter()
+                            self._store_packet(data, recv_ns, recv_monotonic_s)
 
                         except TimeoutError:
                             continue
