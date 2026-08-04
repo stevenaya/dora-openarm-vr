@@ -32,7 +32,7 @@ Meta Quest UDP pose receiver — specification
 [2. Validity Handling]
 - OK (0):     normal processing
 - STALE (1):  HMD is sending last-good pose; pass through smoother normally
-- INVALID(2): do not output pose; reset smoother so re-entry is jump-free
+- INVALID(2): do not output pose; preserve the last pose and clear filter motion
 - buttons/triggers/grips are always forwarded regardless of pose validity
 
 [3. Coordinate Transformation (LH to RH)]
@@ -173,12 +173,17 @@ def _run(args: argparse.Namespace) -> None:
     receiver = JsonUdpReceiver(args.host, args.port)
     processor = QuestPoseProcessor()
 
-    smoother_right = OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5)
-    smoother_left = OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5)
+    smoother_kwargs = dict(
+        min_cutoff=2.0,
+        beta=0.04,
+        d_cutoff=1.5,
+        max_linear_speed=args.max_linear_speed,
+        max_angular_speed=args.max_angular_speed,
+    )
+    smoother_right = OneEuroPoseSmoother(**smoother_kwargs)
+    smoother_left = OneEuroPoseSmoother(**smoother_kwargs)
     smoother_reference = OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5)
 
-    prev_v_right = VALID_OK
-    prev_v_left = VALID_OK
     prev_v_overall = VALID_OK
     prev_v_reference = VALID_OK
 
@@ -212,15 +217,13 @@ def _run(args: argparse.Namespace) -> None:
         pose_right_raw, pose_left_raw, pose_reference_raw = processor.process(msg)
 
         if v_right == VALID_INVALID:
-            if prev_v_right != VALID_INVALID:
-                smoother_right.reset()
+            smoother_right.suspend(now)
             pose_right = None
         else:
             pose_right = smoother_right.smooth(now, pose_right_raw)
 
         if v_left == VALID_INVALID:
-            if prev_v_left != VALID_INVALID:
-                smoother_left.reset()
+            smoother_left.suspend(now)
             pose_left = None
         else:
             pose_left = smoother_left.smooth(now, pose_left_raw)
@@ -232,8 +235,6 @@ def _run(args: argparse.Namespace) -> None:
         else:
             pose_reference = smoother_reference.smooth(now, pose_reference_raw)
 
-        prev_v_right = v_right
-        prev_v_left = v_left
         prev_v_reference = v_overall
 
         ts = {"timestamp": time.time_ns()}
@@ -315,7 +316,23 @@ def main() -> None:
     )
     parser.add_argument("--host", default=_DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=_DEFAULT_PORT)
+    parser.add_argument(
+        "--max-linear-speed",
+        type=float,
+        default=1.0,
+        help="Maximum output translation speed in m/s; 0 disables it (default: 1.0).",
+    )
+    parser.add_argument(
+        "--max-angular-speed",
+        type=float,
+        default=6.0,
+        help="Maximum output rotation speed in rad/s; 0 disables it (default: 6.0).",
+    )
     args = parser.parse_args()
+    if not np.isfinite(args.max_linear_speed) or args.max_linear_speed < 0.0:
+        parser.error("--max-linear-speed must be finite and non-negative")
+    if not np.isfinite(args.max_angular_speed) or args.max_angular_speed < 0.0:
+        parser.error("--max-angular-speed must be finite and non-negative")
     _run(args)
 
 
