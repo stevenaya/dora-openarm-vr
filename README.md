@@ -38,6 +38,21 @@ uv run dora build config/dataflow-mujoco.yaml --uv
 uv run dora run config/dataflow-mujoco.yaml --uv
 ```
 
+Collect physical-arm data with clutch-based relative teleoperation. This
+configuration uses the sibling `dora-openarm`, `dora-openarm-kinematics`,
+`openarm_driver`, and `dora-openarm-dataset-recorder` checkouts.
+
+```bash
+uv run dora build config/dataflow-relative-data-collection.yaml --uv
+uv run dora run config/dataflow-relative-data-collection.yaml --uv
+```
+
+Release the left grip once before the first synchronization, then hold and
+release it to enter relative control. Later grip cycles only update the pose
+reference. Press Y while holding the grip to force a measured-state
+synchronization. Episodes are controlled by the collection UI, while the arm
+and relative calibration remain active across episode boundaries.
+
 ## Related links
 
 - 💬 Join the community on [Discord](https://discord.gg/FsZaZ4z3We)

@@ -43,3 +43,11 @@ htmlcov/
 .idea/
 *.swp
 .DS_Store
+
+out/
+*.parquet
+*.log
+*.jpeg
+*.jpg
+
+metadata.yaml
