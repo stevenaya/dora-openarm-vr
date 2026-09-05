@@ -22,6 +22,26 @@ nodes:
       METADATA_FILE: "test_metadata.yaml"
     inputs:
       tick: dora/timer/secs/1
+      camera_wrist_right:
+        source: camera-wrist-right/image
+        queue_size: 1
+      camera_wrist_left:
+        source: camera-wrist-left/image
+        queue_size: 1
+      camera_head_left:
+        source: camera-head-stereo-splitter/image_0
+        queue_size: 1
+      camera_head_right:
+        source: camera-head-stereo-splitter/image_1
+        queue_size: 1
+      camera_ceiling:
+        source: camera-ceiling/image
+        queue_size: 1
+      arm_status_right: arm-right/status
+      arm_status_left: arm-left/status
+      vr_receive_times:
+        source: vr-receiver/vr_receive_times
+        queue_size: 100
       button_a:
         source: vr-receiver/button_a
         queue_size: 100
@@ -30,6 +50,7 @@ nodes:
         queue_size: 100
     outputs:
       - command
+      - arm_command
 
   - id: quittable-tick-arm
     build: pip install git+https://github.com/enactic/dora-openarm-quitter
@@ -97,10 +118,11 @@ nodes:
   - id: arm-right
     build: pip install -e ../../openarm_driver -e ../../dora-openarm
     path: dora-openarm
-    args: "--side right --no-align --start-on-startup --config ../../openarm_cell_higher_pd_gr00t.yaml"
+    args: "--side right --no-align --config ../../openarm_cell_higher_pd_gr00t.yaml"
     inputs:
       request_state: quittable-tick-arm/tick
       move_position: vr-ik/position_right
+      command: ui/arm_command
     outputs:
       - position
       - state
@@ -110,10 +132,11 @@ nodes:
   - id: arm-left
     build: pip install -e ../../openarm_driver -e ../../dora-openarm
     path: dora-openarm
-    args: "--side left --no-align --start-on-startup --config ../../openarm_cell_higher_pd_gr00t.yaml"
+    args: "--side left --no-align --config ../../openarm_cell_higher_pd_gr00t.yaml"
     inputs:
       request_state: quittable-tick-arm/tick
       move_position: vr-ik/position_left
+      command: ui/arm_command
     outputs:
       - position
       - state
@@ -206,7 +229,6 @@ nodes:
       IMAGE_HEIGHT: 720
       IMAGE_WIDTH: 2560
     inputs:
-      tick: quittable-tick-camera/tick
       image: camera-head-stereo/image
     outputs:
       - image_0

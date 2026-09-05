@@ -20,6 +20,26 @@ nodes:
       METADATA_FILE: "test_metadata.yaml"
     inputs:
       tick: dora/timer/secs/1
+      camera_wrist_right:
+        source: camera-wrist-right/image
+        queue_size: 1
+      camera_wrist_left:
+        source: camera-wrist-left/image
+        queue_size: 1
+      camera_head_left:
+        source: camera-head-stereo-splitter/image_0
+        queue_size: 1
+      camera_head_right:
+        source: camera-head-stereo-splitter/image_1
+        queue_size: 1
+      camera_ceiling:
+        source: camera-ceiling/image
+        queue_size: 1
+      arm_status_right: follower-right/status
+      arm_status_left: follower-left/status
+      vr_receive_times:
+        source: udp-receiver/vr_receive_times
+        queue_size: 100
       button_a:
         source: udp-receiver/button_a
         queue_size: 100
@@ -28,6 +48,7 @@ nodes:
         queue_size: 100
     outputs:
       - command
+      - arm_command
 
   - id: quittable-tick-leader
     build: pip install git+https://github.com/enactic/dora-openarm-quitter
@@ -69,6 +90,7 @@ nodes:
       - button_b
       - button_x
       - button_y
+      - vr_receive_times
       - status
 
   - id: ik
@@ -109,6 +131,7 @@ nodes:
       # Event ID is only used. Event value isn't used.
       request_state: ik/position_right
       move_position: ik/position_right
+      command: ui/arm_command
     outputs:
       - state
       - status
@@ -121,6 +144,7 @@ nodes:
     inputs:
       request_state: ik/position_left
       move_position: ik/position_left
+      command: ui/arm_command
     outputs:
       - state
       - status
@@ -179,7 +203,6 @@ nodes:
     build: pip install git+https://github.com/enactic/dora-opencv-image-splitter
     path: dora-opencv-image-splitter
     inputs:
-      tick: quittable-tick-camera/tick
       image: camera-head-stereo/image
     env:
       SPLIT_MODE: "vertical"
