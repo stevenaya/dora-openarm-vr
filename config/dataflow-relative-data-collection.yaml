@@ -118,9 +118,9 @@ nodes:
   - id: arm-right
     build: pip install -e ../../openarm_driver -e ../../dora-openarm
     path: dora-openarm
-    args: "--side right --no-align --config ../../openarm_cell_higher_pd_gr00t.yaml"
+    args: "--side right --no-align --config ../../../openarm_cell_higher_pd_gr00t.yaml"
     inputs:
-      request_state: quittable-tick-arm/tick
+      publish_tick: quittable-tick-arm/tick
       move_position: vr-ik/position_right
       command: ui/arm_command
     outputs:
@@ -132,9 +132,9 @@ nodes:
   - id: arm-left
     build: pip install -e ../../openarm_driver -e ../../dora-openarm
     path: dora-openarm
-    args: "--side left --no-align --config ../../openarm_cell_higher_pd_gr00t.yaml"
+    args: "--side left --no-align --config ../../../openarm_cell_higher_pd_gr00t.yaml"
     inputs:
-      request_state: quittable-tick-arm/tick
+      publish_tick: quittable-tick-arm/tick
       move_position: vr-ik/position_left
       command: ui/arm_command
     outputs:
