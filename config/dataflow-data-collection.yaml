@@ -142,7 +142,6 @@ nodes:
       move_position: ik/position_right
       command: ui/arm_command
     outputs:
-      - position
       - state
       - latest_command
       - status
@@ -157,7 +156,6 @@ nodes:
       move_position: ik/position_left
       command: ui/arm_command
     outputs:
-      - position
       - state
       - latest_command
       - status
