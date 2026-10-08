@@ -120,12 +120,12 @@ nodes:
     path: dora-openarm
     args: "--side right --no-align --config ../../../openarm_cell_higher_pd_gr00t.yaml"
     inputs:
-      publish_tick: quittable-tick-arm/tick
+      request_state: quittable-tick-arm/tick
       move_position: vr-ik/position_right
       command: ui/arm_command
     outputs:
       - state
-      - latest_command
+      - commanded_position
       - status
 
   - id: arm-left
@@ -133,12 +133,12 @@ nodes:
     path: dora-openarm
     args: "--side left --no-align --config ../../../openarm_cell_higher_pd_gr00t.yaml"
     inputs:
-      publish_tick: quittable-tick-arm/tick
+      request_state: quittable-tick-arm/tick
       move_position: vr-ik/position_left
       command: ui/arm_command
     outputs:
       - state
-      - latest_command
+      - commanded_position
       - status
 
   - id: vr-ik
@@ -153,8 +153,8 @@ nodes:
     inputs:
       state_right: arm-right/state
       state_left: arm-left/state
-      command_right: arm-right/latest_command
-      command_left: arm-left/latest_command
+      command_right: arm-right/commanded_position
+      command_left: arm-left/commanded_position
       active: teleop/active
       syncstate: teleop/syncstate
       sync_mode: teleop/sync_mode
@@ -259,9 +259,9 @@ nodes:
         queue_size: 10
       # Record the final commands accepted by the physical drivers, rather than
       # the pre-clamp IK candidates. Repeated snapshots are filtered by recorder.
-      arm_right_action: arm-right/latest_command
+      arm_right_action: arm-right/commanded_position
       arm_right_observation: arm-right/state
-      arm_left_action: arm-left/latest_command
+      arm_left_action: arm-left/commanded_position
       arm_left_observation: arm-left/state
       elevation_action: lifter/elevation_action
       elevation_observation: lifter/elevation_observation

@@ -138,12 +138,12 @@ nodes:
     args: "--side right --align-trigger gripper"
     inputs:
       # Event ID is only used. Event value isn't used.
-      publish_tick: quittable-tick-arm/tick
+      request_state: quittable-tick-arm/tick
       move_position: ik/position_right
       command: ui/arm_command
     outputs:
       - state
-      - latest_command
+      - commanded_position
       - status
 
   - id: follower-left
@@ -152,12 +152,12 @@ nodes:
     # args: "--side left --align-trigger gripper --config ../../openarm_driver/config/openarm_cell_higher_pd.yaml"
     args: "--side left --align-trigger gripper"
     inputs:
-      publish_tick: quittable-tick-arm/tick
+      request_state: quittable-tick-arm/tick
       move_position: ik/position_left
       command: ui/arm_command
     outputs:
       - state
-      - latest_command
+      - commanded_position
       - status
 
   - id: lifter
